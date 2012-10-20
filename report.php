@@ -27,6 +27,7 @@
 defined('MOODLE_INTERNAL') || die();
 
 require_once($CFG->dirroot . '/mod/quiz/report/copyattempt/copyattempt_form.php');
+require_once($CFG->dirroot . '/mod/quiz/report/copyattempt/syncattempt_form.php');
 
 
 /**
@@ -79,18 +80,82 @@ class quiz_copyattempt_report extends quiz_default_report
         //get arrays of all enrolled students and all attempts
         list($all_students, $all_attempts) = $this->get_students_and_attempts();
 
+        // Get an array of all quizzes offered in this course.
+        $all_quizzes = $this->get_applicable_quizzes();
+
         //compute the target URL for the form manually, as Moodle URL's won't mix POST and GET
         //(yet the report module does, for some reason?)
+        // FIXME: This isn't true- this should be changed.
         $base_url = $CFG->wwwroot . '/mod/quiz/report.php?id=' .$this->cm->id . '&mode=copyattempt';
 
         //create the copy/sync form; if relevant postdata exists, this will automatically wrap it
-        $mform = new quiz_copyattempt_form($all_students, $all_attempts, $base_url);
+        $copy_form = new quiz_copyattempt_form($all_students, $all_attempts, $base_url);
+        $sync_form = new quiz_syncattempt_form($all_quizzes, $base_url);
+
+        // Handle any requested attempt copy or sync actions.
+        $this->handle_attempt_copy($copy_form);
+        $this->handle_partner_sync($sync_form);
+
+        //display the copy/sync form
+        $copy_form->display();
+        $sync_form->display();
+
+
+        return true;
+    }
+
+    /**
+     * Synchronizes all quiz attempts between partners, based on an array of partnerships.
+     * 
+     * @param array $partnerships A list of attempts to be synchronized, in source => destination format.
+     * @return int The amount of partnerships synchronized successfully.
+     */
+    protected function synchronize_via_partnerships($partnerships) {
         
+        global $DB;
+
+        // Start a count of successfully synchronized partnerships.
+        $count = 0;
+
+        // Find all attempts at the current quiz.
+        $attempts = $DB->get_records('quiz_attempts', array('quiz' => $this->quiz->id));
+        
+        // For each of the provided attempts...
+        foreach($attempts as $attempt_data) {
+
+            // Wrap the data in an attempt object.
+            $attempt = new quiz_attempt($attempt_data, $this->quiz, $this->cm, $this->course);
+
+            // Get the User ID for the user taking the quiz.
+            $respondant = $attempt->get_userid();
+
+            // If this is a finished quiz attempt, and the user has a partner...
+            if(!empty($partnerships[$respondant]) && $attempt->is_finished()) {
+                
+                // ... copy the attempt to that partner.
+                quiz_synchronization::copy_attempt_to_user($attempt, $partnerships[$respondant]);
+
+                // Increase the correctly synchronized count.
+                ++$count;
+
+            }
+        }
+
+        return $count;
+    }
+
+
+
+    /** 
+     * Handles the submission of the "quiz attempt copy" form.
+     */
+    protected function handle_attempt_copy($copy_form) {
+
         //if we're on this page due to a form submission, get the data
-        $response = $mform->get_data();
+        $response = $copy_form->get_data();
 
         //perform the copy, if requested
-        if($response)
+        if($copy_form->is_submitted() && $response)
         {
             //load the attempt object that's about to be copied
             $attempt = quiz_attempt::create($response->copyattempt);
@@ -103,24 +168,35 @@ class quiz_copyattempt_report extends quiz_default_report
             echo html_writer::tag('p', '');
 
             //clear the form
-            $mform->set_data(new stdClass);
+            $copy_form->set_data(new stdclass);
         }
-
-        //display the synchronization form
-        $mform->display();
-
-        return true;
     }
 
+    /**
+     * Returns an array of all quizzes which can be used as a source for partnerships.
+     */ 
+    protected function get_applicable_quizzes() {
+
+       global $DB;
+
+       //TODO: replace with "get all quizzes with attempts" or "get all quizzes with partner questions"
+       return $DB->get_records('quiz', array('course' => $this->course->id), null,'id,name');
+
+    }
 
     /**
      * Returns an array containing all enrolled students, and all existing attempts. 
      * 
      * @return array    An array whose first element is an array of enrolled student objects, and whose second element is an array of (completed?) attempt objects.
      */
-    protected function get_students_and_attempts()
+    protected function get_students_and_attempts($quiz_id = null)
     {
         global $DB;
+
+        // If no quiz ID was provided, assume the current quiz.
+        if($quiz_id === null) {
+            $quiz_id = $this->quiz->id;
+        }
 
         //get the list of all students
         $all_students = get_enrolled_users($this->context, '', 0, 'u.id, u.firstname, u.lastname');
@@ -134,11 +210,94 @@ class quiz_copyattempt_report extends quiz_default_report
                     WHERE q.id = :qid AND qa.timefinish != 0
                     ORDER BY u.lastname';
 
-        //get all attempts
-        $all_attempts = $DB->get_records_sql($all_attempts_sql, array('qid' => $this->quiz->id));
+        //get all attempts for the current quiz
+        $all_attempts = $DB->get_records_sql($all_attempts_sql, array('qid' => $quiz_id));
 
         //return the students and attempts found
         return array($all_students, $all_attempts);
     }
+
+    /**
+     * Handles submission of the partner synchronization form.
+     *
+     * @param moodleform $sync_form The partner synchronization form to be handled.
+     */ 
+    protected function handle_partner_sync($sync_form) {
+
+        global $OUTPUT;
+
+        //if we're on this page due to a form submission, get the data
+        $response = $sync_form->get_data();
+
+        //perform the sync, if requested
+        if($sync_form->is_submitted() && $response)
+        {
+
+            //Get a list of partnerships in present in the given quiz.
+            $partnerships = $this->find_partnerships($response->syncfrom);
+
+            // If we found a valid list of partnerships...
+            if($partnerships) {
+
+                //TODO: check to see if attempt already exists
+
+                // Synchronize each of the partnerships...
+                $count = $this->synchronize_via_partnerships($partnerships);
+
+                // ... and report the count.
+                $OUTPUT->notification(get_string('synccount', 'quiz_copyattempt', $count));
+            }
+        }
+    }
+
+    /**
+     * Attempts to identify all known partnerships in a given quiz.
+     *
+     * @param int The ID of the quiz to read from.
+     */ 
+    protected function find_partnerships($quiz_id) {
+
+        global $DB;
+
+        // Start a new array mapping partnerships.
+        $partners = array();
+
+        // Create a new instance of the quiz, for reference use.
+        $quiz = quiz::create($quiz_id, $USER->id);
+
+        // Find all attempts at the given quiz.
+        $attempts = $DB->get_records('quiz_attempts', array('quiz' => $quiz_id));        
+
+        // For each of the given quiz attempts...
+        foreach($attempts as $attempt_data) {
+
+            // Create a new attempt object for the given quiz attempt...
+            $attempt = new quiz_attempt($attempt_data, $quiz, $this->cm, $this->course);
+
+            // If this was a preview attempt, exclude it from the list of partnerships.
+            if(!$attempt->is_preview()) {
+        
+                // Find the partner for a given quiz attempt, if one exists.
+                $partner = quiz_synchronization::get_partner($attempt);
+
+                // If we've found a quiz with a valid partnership
+                if($partner) {
+                    
+                    // Add the partnership to our list of partners.
+                    // Note that we add the relationship both ways; this allows us to take advantage of 
+                    // PHP's semi-fast hashed arrays, at the cost of doubling the size of the array.
+                    $partners[$attempt->get_userid()] = $partner;
+                    $partners[$partner] = $attempt->get_userid();
+                }
+            }
+
+        }
+
+        // Return the created list of partners.
+        return $partners;
+    }
+
+
+
 
 }

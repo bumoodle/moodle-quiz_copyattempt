@@ -29,7 +29,13 @@ $string['pluginname'] = $string['copyattempt'] = 'Copy Attempts';
 $string['copysync'] = 'Copy / Synchronize Attempts';
 $string['copyto'] = 'Copy To';
 $string['copyfrom'] = 'Copy From';
-$string['copysubmit'] = 'Copy Attempt';
-
+$string['copyattempt'] = 'Copy Attempt';
 $string['copied'] = 'Attempt copied.';
+
+
+$string['syncpartners'] = 'Synchronize Attempts between Partners';
+$string['syncfrom'] ='Read Partnerships from';
+$string['sync'] = 'Synchronize Attempts';
+$string['thisquiz'] = 'Current Quiz';
+$string['synccount'] = '{$a} attempts synchronized!';
 

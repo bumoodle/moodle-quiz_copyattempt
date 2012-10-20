@@ -18,8 +18,8 @@
  * This file defines the setting form for the quiz grading report.
  *
  * @package    quiz
- * @subpackage grading
- * @copyright  2010 Tim Hunt
+ * @subpackage copyattempt
+ * @copyright  2012 Binghamton University
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 
@@ -110,6 +110,8 @@ class quiz_copyattempt_form extends moodleform
         //(mform is the standard Moodle name)
         $mform =& $this->_form;
 
+        $mform->addElement('header', 'copy', get_string('copyattempt', 'quiz_copyattempt'));
+
         //add a "copy from" student select
         $mform->addElement('select', 'copyattempt', get_string('copyfrom', 'quiz_copyattempt'), $this->attempt_select(), array('size' => 8, 'style' => 'width: 300px'));
 
@@ -117,6 +119,6 @@ class quiz_copyattempt_form extends moodleform
         $mform->addElement('select', 'copyto', get_string('copyto', 'quiz_copyattempt'), $this->student_select(), array('size' => 8, 'style' => 'width: 300px'));
 
         //add the submit/reset buttons
-        $this->add_action_buttons(false, get_string('copysubmit', 'quiz_copyattempt'));
+        $this->add_action_buttons(false, get_string('copyattempt', 'quiz_copyattempt'));
     }
 }
